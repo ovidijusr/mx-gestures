@@ -17,13 +17,10 @@ Tested on an MX Master 2S over a Unifying receiver; other MX Master models adver
 
 ### From a release
 
-1. Download the `.app` zip from [Releases](../../releases), unzip, move **MX Gestures.app** to `/Applications`.
-2. The app isn't notarized, so the first launch needs one of:
-   - right-click the app → **Open** → **Open**, or
-   - `xattr -d com.apple.quarantine "/Applications/MX Gestures.app"`
-3. Launch it. A mouse icon appears in the menu bar and macOS asks for **Accessibility** — the app registers itself in the list, just flip the toggle on (System Settings → Privacy & Security → Accessibility).
-4. On the first gesture, approve the **Automation** ("control System Events") prompt.
-5. Optional: click the menu-bar icon → check **Start at login**.
+1. Download the `.app` zip from [Releases](../../releases), unzip, open **MX Gestures.app** (releases are signed and notarized — no Gatekeeper warning). If launched outside `/Applications` it offers to move itself there.
+2. A mouse icon appears in the menu bar and macOS asks for **Accessibility** — the app registers itself in the list, just flip the toggle on (System Settings → Privacy & Security → Accessibility).
+3. On the first gesture, approve the **Automation** ("control System Events") prompt.
+4. Optional: click the menu-bar icon → check **Start at login**.
 
 ### From source
 
