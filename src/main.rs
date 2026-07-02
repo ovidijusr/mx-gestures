@@ -2,6 +2,7 @@ mod actions;
 mod config;
 mod gesture;
 mod hidpp;
+mod tray;
 
 use config::Config;
 use gesture::Tracker;
@@ -48,9 +49,9 @@ fn main() {
             }
             return;
         }
-        Some("--verbose") | Some("-v") | None => {}
+        Some("--verbose") | Some("-v") | Some("--headless") | None => {}
         Some(other) => {
-            eprintln!("usage: mx-gestures [--verbose|install|uninstall]");
+            eprintln!("usage: mx-gestures [--verbose|--headless|install|uninstall|reset|fire <action>]");
             eprintln!("unknown argument: {other}");
             std::process::exit(2);
         }
@@ -66,19 +67,32 @@ fn main() {
              detected but actions won't fire.\n  Grant it in System Settings → Privacy & \
              Security → Accessibility."
         );
+        // Registers the app in the Accessibility list and shows the system
+        // dialog, so the user only needs to flip the toggle.
+        actions::request_accessibility();
     }
 
-    // Outer resilience loop: receiver unplugged / mouse asleep / transient errors.
-    loop {
-        match run(&cfg, verbose) {
-            Ok(()) => {}
-            Err(e) => {
-                if verbose {
-                    eprintln!("[mx-gestures] {e}; retrying in 3s");
+    // Gesture engine in a background thread; menu-bar UI on the main thread
+    // (macOS requires AppKit on the main thread). --headless skips the UI.
+    let engine = move || {
+        // Outer resilience loop: receiver unplugged / mouse asleep / transient errors.
+        loop {
+            match run(&cfg, verbose) {
+                Ok(()) => {}
+                Err(e) => {
+                    if verbose {
+                        eprintln!("[mx-gestures] {e}; retrying in 3s");
+                    }
                 }
             }
+            thread::sleep(Duration::from_secs(3));
         }
-        thread::sleep(Duration::from_secs(3));
+    };
+    if args.iter().any(|a| a == "--headless") {
+        engine();
+    } else {
+        thread::spawn(engine);
+        tray::run_app();
     }
 }
 
@@ -220,7 +234,7 @@ fn run(cfg: &Config, verbose: bool) -> hidpp::Result<()> {
     }
 }
 
-mod cleanup {
+pub mod cleanup {
     use std::sync::Mutex;
 
     static HANDLER: Mutex<Option<Box<dyn FnOnce() + Send>>> = Mutex::new(None);
@@ -229,17 +243,22 @@ mod cleanup {
     pub fn arm<F: FnOnce() + Send + 'static>(f: F) {
         *HANDLER.lock().unwrap() = Some(Box::new(f));
         unsafe {
-            signal(2, handle as usize); // SIGINT
-            signal(15, handle as usize); // SIGTERM
+            signal(2, handle as *const () as usize); // SIGINT
+            signal(15, handle as *const () as usize); // SIGTERM
+        }
+    }
+
+    /// Run the armed cleanup immediately (used by the menu-bar Quit).
+    pub fn run_now() {
+        if let Some(f) = HANDLER.lock().unwrap().take() {
+            f();
         }
     }
 
     extern "C" fn handle(_sig: i32) {
         // Not async-signal-safe, but we're exiting anyway — worst case the
         // un-divert write fails and a power cycle of the mouse clears it.
-        if let Some(f) = HANDLER.lock().unwrap().take() {
-            f();
-        }
+        run_now();
         std::process::exit(0);
     }
 
@@ -248,7 +267,7 @@ mod cleanup {
     }
 }
 
-mod install {
+pub mod install {
     use std::path::PathBuf;
     use std::process::Command;
 
@@ -259,11 +278,16 @@ mod install {
         PathBuf::from(home).join(format!("Library/LaunchAgents/{LABEL}.plist"))
     }
 
-    pub fn install() {
+    pub fn is_installed() -> bool {
+        plist_path().exists()
+    }
+
+    /// Write + bootstrap the LaunchAgent. Returns Ok(binary path) on success.
+    /// KeepAlive only on crash (SuccessfulExit=false) so menu-bar Quit sticks.
+    fn write_and_load() -> Result<PathBuf, String> {
         let exe = std::env::current_exe()
-            .expect("cannot resolve own path")
-            .canonicalize()
-            .expect("cannot canonicalize own path");
+            .and_then(|p| p.canonicalize())
+            .map_err(|e| format!("cannot resolve own path: {e}"))?;
         let log = "/tmp/mx-gestures.log";
         let plist = format!(
             r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -274,7 +298,7 @@ mod install {
     <key>ProgramArguments</key>
     <array><string>{}</string></array>
     <key>RunAtLoad</key><true/>
-    <key>KeepAlive</key><true/>
+    <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
     <key>StandardOutPath</key><string>{log}</string>
     <key>StandardErrorPath</key><string>{log}</string>
 </dict>
@@ -283,35 +307,83 @@ mod install {
             exe.display()
         );
         let path = plist_path();
-        std::fs::write(&path, plist).expect("failed to write LaunchAgent plist");
-        // bootout first so re-install picks up a changed binary path
+        std::fs::write(&path, plist).map_err(|e| format!("failed to write plist: {e}"))?;
         let _ = Command::new("launchctl")
             .args(["bootout", &format!("gui/{}", uid()), path.to_str().unwrap()])
             .output();
         let st = Command::new("launchctl")
             .args(["bootstrap", &format!("gui/{}", uid()), path.to_str().unwrap()])
             .status()
-            .expect("failed to run launchctl");
-        if st.success() {
-            println!("installed and started {LABEL}");
-            println!("  binary: {}", exe.display());
-            println!("  logs:   {log}");
-            println!("If actions don't fire, add the binary to System Settings → Privacy & Security → Accessibility.");
-        } else {
-            eprintln!("launchctl bootstrap failed (status {st})");
-            std::process::exit(1);
-        }
+            .map_err(|e| format!("failed to run launchctl: {e}"))?;
+        if st.success() { Ok(exe) } else { Err(format!("launchctl bootstrap failed ({st})")) }
     }
 
-    pub fn uninstall() {
+    fn unload_and_remove() {
         let path = plist_path();
         let _ = Command::new("launchctl")
             .args(["bootout", &format!("gui/{}", uid()), path.to_str().unwrap()])
             .output();
-        match std::fs::remove_file(&path) {
-            Ok(()) => println!("uninstalled {LABEL}"),
-            Err(e) => eprintln!("could not remove {}: {e}", path.display()),
+        let _ = std::fs::remove_file(&path);
+    }
+
+    pub fn install() {
+        match write_and_load() {
+            Ok(exe) => {
+                println!("installed and started {LABEL}");
+                println!("  binary: {}", exe.display());
+                println!("  logs:   /tmp/mx-gestures.log");
+                println!("If actions don't fire, add the binary to System Settings → Privacy & Security → Accessibility.");
+            }
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
         }
+    }
+
+    pub fn uninstall() {
+        unload_and_remove();
+        println!("uninstalled {LABEL}");
+    }
+
+    /// Register at login WITHOUT bootstrapping a second live instance — used
+    /// by the menu-bar toggle while this process is already the running app.
+    pub fn install_quiet() {
+        if let Err(e) = write_plist_only() {
+            eprintln!("[mx-gestures] start-at-login enable failed: {e}");
+        }
+    }
+
+    pub fn uninstall_quiet() {
+        // Remove the plist but leave the current process running. bootout is
+        // skipped: it would kill us (this process runs under that label when
+        // started by launchd).
+        let _ = std::fs::remove_file(plist_path());
+    }
+
+    fn write_plist_only() -> Result<(), String> {
+        let exe = std::env::current_exe()
+            .and_then(|p| p.canonicalize())
+            .map_err(|e| format!("cannot resolve own path: {e}"))?;
+        let log = "/tmp/mx-gestures.log";
+        let plist = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key><string>{LABEL}</string>
+    <key>ProgramArguments</key>
+    <array><string>{}</string></array>
+    <key>RunAtLoad</key><true/>
+    <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+    <key>StandardOutPath</key><string>{log}</string>
+    <key>StandardErrorPath</key><string>{log}</string>
+</dict>
+</plist>
+"#,
+            exe.display()
+        );
+        std::fs::write(plist_path(), plist).map_err(|e| format!("failed to write plist: {e}"))
     }
 
     fn uid() -> u32 {

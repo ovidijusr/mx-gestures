@@ -17,10 +17,12 @@ const REPORT_SHORT: u8 = 0x10;
 const REPORT_LONG: u8 = 0x11;
 const SW_ID: u8 = 0x0A;
 
-// Feature IDs
+// Feature IDs (unused ones kept as protocol documentation)
+#[allow(dead_code)]
 pub const FEAT_ROOT: u16 = 0x0000;
 pub const FEAT_DEVICE_NAME: u16 = 0x0005;
 pub const FEAT_REPROG_CONTROLS_V4: u16 = 0x1B04;
+#[allow(dead_code)]
 pub const FEAT_WIRELESS_STATUS: u16 = 0x1D4B;
 
 /// Gesture ("palm") button on the MX Master family.

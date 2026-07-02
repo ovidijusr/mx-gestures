@@ -1,6 +1,6 @@
 [package]
 name = "mx-gestures"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "MX Master 2S gesture button → macOS trackpad-style gestures (Spaces, Mission Control, App Exposé)"
 license = "MIT"
@@ -8,8 +8,11 @@ license = "MIT"
 [dependencies]
 hidapi = "2"
 core-graphics = "0.24"
+core-foundation = "0.10"
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
+tray-icon = "0.21"
+tao = "0.34"
 
 [profile.release]
 opt-level = "z"

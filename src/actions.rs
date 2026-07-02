@@ -11,10 +11,32 @@ const KC_UP: CGKeyCode = 0x7E;
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
     fn AXIsProcessTrusted() -> bool;
+    fn AXIsProcessTrustedWithOptions(
+        options: core_foundation::dictionary::CFDictionaryRef,
+    ) -> bool;
+    static kAXTrustedCheckOptionPrompt: core_foundation::string::CFStringRef;
 }
 
 pub fn accessibility_trusted() -> bool {
     unsafe { AXIsProcessTrusted() }
+}
+
+/// Ask macOS to show the Accessibility permission dialog. Side effect: the
+/// app is registered in the Privacy & Security → Accessibility list, so the
+/// user only has to flip the toggle instead of hunting for the binary.
+pub fn request_accessibility() -> bool {
+    use core_foundation::base::TCFType;
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::string::CFString;
+    unsafe {
+        let key = CFString::wrap_under_get_rule(kAXTrustedCheckOptionPrompt);
+        let opts = CFDictionary::from_CFType_pairs(&[(
+            key.as_CFType(),
+            CFBoolean::true_value().as_CFType(),
+        )]);
+        AXIsProcessTrustedWithOptions(opts.as_concrete_TypeRef())
+    }
 }
 
 pub fn resolve(gesture: Gesture, cfg: &Config) -> Action {
