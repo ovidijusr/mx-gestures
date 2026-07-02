@@ -997,7 +997,7 @@ dependencies = [
 
 [[package]]
 name = "mx-gestures"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "core-foundation",
  "core-graphics 0.24.0",

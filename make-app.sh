@@ -9,8 +9,9 @@ APP="/Applications/MX Gestures.app"
 # Signing: use MXG_SIGN_IDENTITY if set, else the first Apple codesigning
 # identity in the keychain, else ad-hoc ("-"). A real identity keeps macOS
 # permissions (Accessibility) across rebuilds; ad-hoc works but re-prompts.
-IDENTITY="${MXG_SIGN_IDENTITY:-$(security find-identity -v -p codesigning 2>/dev/null \
-    | awk -F'"' '/Developer ID Application|Apple Development/ {print $2; exit}')}"
+IDS="$(security find-identity -v -p codesigning 2>/dev/null)"
+IDENTITY="${MXG_SIGN_IDENTITY:-$(echo "$IDS" | awk -F'"' '/Developer ID Application/ {print $2; exit}')}"
+IDENTITY="${IDENTITY:-$(echo "$IDS" | awk -F'"' '/Apple Development/ {print $2; exit}')}"
 IDENTITY="${IDENTITY:--}"
 echo "signing identity: $IDENTITY"
 
@@ -43,8 +44,8 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
     <key>CFBundleExecutable</key><string>mx-gestures</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>0.2.0</string>
-    <key>CFBundleVersion</key><string>0.2.0</string>
+    <key>CFBundleShortVersionString</key><string>0.2.1</string>
+    <key>CFBundleVersion</key><string>0.2.1</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>LSUIElement</key><true/>
     <key>NSHumanReadableCopyright</key><string>MIT</string>
@@ -52,5 +53,16 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
 </plist>
 EOF
 
-codesign --force --options runtime --sign "$IDENTITY" "$APP"
+codesign --force --options runtime --timestamp --sign "$IDENTITY" "$APP"
 codesign --verify --deep "$APP" && echo "signed OK: $APP"
+
+# ./make-app.sh --notarize  — upload to Apple's notary service and staple.
+# One-time setup: xcrun notarytool store-credentials mx-gestures \
+#   --apple-id <you> --team-id <team> --password <app-specific password>
+if [ "${1:-}" = "--notarize" ]; then
+    ZIP="$(mktemp -d)/MX.Gestures.zip"
+    ditto -c -k --keepParent "$APP" "$ZIP"
+    xcrun notarytool submit "$ZIP" --keychain-profile mx-gestures --wait
+    xcrun stapler staple "$APP"
+    spctl -a -vv "$APP" && echo "notarized + stapled OK"
+fi

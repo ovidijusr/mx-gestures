@@ -1,6 +1,6 @@
 [package]
 name = "mx-gestures"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 description = "MX Master 2S gesture button → macOS trackpad-style gestures (Spaces, Mission Control, App Exposé)"
 license = "MIT"

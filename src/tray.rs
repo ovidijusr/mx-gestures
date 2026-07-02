@@ -15,7 +15,45 @@ enum UserEvent {
     Menu(MenuEvent),
 }
 
+/// If running from Downloads/Desktop/a DMG, offer to move the bundle to
+/// /Applications (the login item and TCC grants want a stable path).
+/// Same UX as the LetsMove pattern; on move, relaunches from the new home.
+pub fn offer_move_to_applications() {
+    let Ok(exe) = std::env::current_exe() else { return };
+    // .../MX Gestures.app/Contents/MacOS/mx-gestures → the .app root
+    let Some(app) = exe.ancestors().nth(3).map(std::path::Path::to_path_buf) else { return };
+    if app.extension().and_then(|e| e.to_str()) != Some("app")
+        || app.starts_with("/Applications")
+    {
+        return; // not bundled, or already home
+    }
+    let dest = std::path::Path::new("/Applications").join(app.file_name().unwrap());
+    let script = "display dialog \"Move MX Gestures to the Applications folder? It needs a permanent home for login-item and permission tracking.\" buttons {\"Not Now\", \"Move\"} default button \"Move\" with icon note";
+    let ok = std::process::Command::new("osascript")
+        .args(["-e", script])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).contains("Move"))
+        .unwrap_or(false);
+    if !ok {
+        return;
+    }
+    let _ = std::fs::remove_dir_all(&dest);
+    let copied = std::process::Command::new("ditto")
+        .arg(&app)
+        .arg(&dest)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if copied {
+        let _ = std::process::Command::new("open").arg(&dest).spawn();
+        // Old copy removes itself best-effort; ignore failure (e.g. on a DMG).
+        let _ = std::fs::remove_dir_all(&app);
+        std::process::exit(0);
+    }
+}
+
 pub fn run_app() -> ! {
+    offer_move_to_applications();
     let mut event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
     // Accessory = no Dock icon, menu-bar only.
     event_loop.set_activation_policy(ActivationPolicy::Accessory);
